@@ -1,9 +1,15 @@
-﻿venv/
+venv/
 __pycache__/
 *.pyc
 *.db
 uploads/
 uploads_old/
 backup_week5/
-
 instance/
+.env
+.env.*
+!.env.example
+.venv/
+*.sqlite
+*.sqlite3
+*.log

@@ -1,6 +1,7 @@
 import sqlite3
 import pickle
 import os
+import secrets
 import uuid
 import mimetypes
 from io import BytesIO
@@ -32,11 +33,23 @@ from werkzeug.security import (
 
 app = Flask(__name__)
 
-app.secret_key = os.environ.get(
-    "SECRET_KEY",
-    "datadharma-development-key"
-)
+# Generate and persist a secure Flask secret key
+os.makedirs("instance", exist_ok=True)
 
+SECRET_KEY_PATH = os.path.join("instance", "flask_secret_key")
+
+SECRET_KEY = os.environ.get("SECRET_KEY")
+
+if not SECRET_KEY:
+    if os.path.exists(SECRET_KEY_PATH):
+        with open(SECRET_KEY_PATH, "r", encoding="utf-8") as key_file:
+            SECRET_KEY = key_file.read().strip()
+    else:
+        SECRET_KEY = secrets.token_hex(32)
+        with open(SECRET_KEY_PATH, "w", encoding="utf-8") as key_file:
+            key_file.write(SECRET_KEY)
+
+app.secret_key = SECRET_KEY
 
 # ============================================================
 # DATABASE
