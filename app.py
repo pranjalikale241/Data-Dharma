@@ -5,26 +5,17 @@ import secrets
 import uuid
 import mimetypes
 from io import BytesIO
+from datetime import datetime, timedelta
 
 from cryptography.fernet import Fernet, InvalidToken
 
-from datetime import datetime, timedelta
-
 from flask import (
-    Flask,
-    render_template,
-    request,
-    redirect,
-    send_from_directory,
-    session,
-    send_file
+    Flask, render_template, request, redirect,
+    send_from_directory, session, send_file
 )
 
 from werkzeug.utils import secure_filename
-from werkzeug.security import (
-    generate_password_hash,
-    check_password_hash
-)
+from werkzeug.security import generate_password_hash, check_password_hash
 
 
 # ============================================================
@@ -33,11 +24,9 @@ from werkzeug.security import (
 
 app = Flask(__name__)
 
-# Generate and persist a secure Flask secret key
 os.makedirs("instance", exist_ok=True)
 
 SECRET_KEY_PATH = os.path.join("instance", "flask_secret_key")
-
 SECRET_KEY = os.environ.get("SECRET_KEY")
 
 if not SECRET_KEY:
@@ -51,11 +40,12 @@ if not SECRET_KEY:
 
 app.secret_key = SECRET_KEY
 
+
 # ============================================================
 # DATABASE
 # ============================================================
 
-DATABASE = "datadharma.db"
+DATABASE = os.path.join(app.root_path, "datadharma.db")
 
 
 def get_db():
@@ -72,52 +62,57 @@ UPLOAD_FOLDER = "uploads"
 INSTANCE_FOLDER = "instance"
 ENCRYPTION_KEY_PATH = os.path.join(INSTANCE_FOLDER, "document_encryption.key")
 ENCRYPTED_PREFIX = b"DATADHARMA_ENCRYPTED_V1\n"
-MAX_CONTENT_LENGTH = 16 * 1024 * 1024  # 16 MB per upload
-app.config["MAX_CONTENT_LENGTH"] = MAX_CONTENT_LENGTH
+MAX_CONTENT_LENGTH = 16 * 1024 * 1024
 
+app.config["MAX_CONTENT_LENGTH"] = MAX_CONTENT_LENGTH
 os.makedirs(INSTANCE_FOLDER, exist_ok=True)
+
 
 def get_fernet():
     """Load or create the persistent key used for document-at-rest encryption."""
     env_key = os.environ.get("DATADHARMA_ENCRYPTION_KEY")
+
     if env_key:
         key = env_key.encode("utf-8")
     else:
         if not os.path.exists(ENCRYPTION_KEY_PATH):
             key = Fernet.generate_key()
+
             with open(ENCRYPTION_KEY_PATH, "wb") as key_file:
                 key_file.write(key)
+
             try:
                 os.chmod(ENCRYPTION_KEY_PATH, 0o600)
             except OSError:
                 pass
+
         with open(ENCRYPTION_KEY_PATH, "rb") as key_file:
             key = key_file.read().strip()
+
     return Fernet(key)
+
 
 def encrypt_document(data):
     return ENCRYPTED_PREFIX + get_fernet().encrypt(data)
 
+
 def decrypt_document(data):
     if not data.startswith(ENCRYPTED_PREFIX):
-        # Backward compatibility for files uploaded before encryption was added.
         return data
+
     try:
         return get_fernet().decrypt(data[len(ENCRYPTED_PREFIX):])
     except InvalidToken as exc:
-        raise ValueError("Could not decrypt this document. Check the encryption key.") from exc
+        raise ValueError(
+            "Could not decrypt this document. Check the encryption key."
+        ) from exc
+
 
 ALLOWED_EXTENSIONS = {
-    "pdf",
-    "jpg",
-    "jpeg",
-    "png",
-    "webp",
-    "docx"
+    "pdf", "jpg", "jpeg", "png", "webp", "docx"
 }
 
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
-
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 
@@ -126,27 +121,18 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 # ============================================================
 
 try:
-
     with open("risk_model.pkl", "rb") as file:
         risk_model = pickle.load(file)
 
     print("AI risk model loaded successfully.")
 
 except FileNotFoundError:
-
     risk_model = None
-
-    print(
-        "WARNING: risk_model.pkl was not found."
-    )
+    print("WARNING: risk_model.pkl was not found.")
 
 except Exception as exc:
-
     risk_model = None
-
-    print(
-        f"WARNING: Could not load AI model: {exc}"
-    )
+    print(f"WARNING: Could not load AI model: {exc}")
 
 
 # ============================================================
@@ -158,9 +144,7 @@ def init_db():
     conn = sqlite3.connect(DATABASE)
     cursor = conn.cursor()
 
-    # --------------------------------------------------------
     # USERS
-    # --------------------------------------------------------
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
@@ -171,9 +155,7 @@ def init_db():
         )
     """)
 
-    # --------------------------------------------------------
     # DOCUMENTS
-    # --------------------------------------------------------
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS documents (
@@ -185,30 +167,24 @@ def init_db():
         )
     """)
 
-    cursor.execute(
-        "PRAGMA table_info(documents)"
-    )
+    cursor.execute("PRAGMA table_info(documents)")
 
     document_columns = [
-        column[1]
-        for column in cursor.fetchall()
+        column[1] for column in cursor.fetchall()
     ]
 
     if "file_path" not in document_columns:
-
         cursor.execute("""
             ALTER TABLE documents
             ADD COLUMN file_path TEXT
         """)
 
     if "owner_id" not in document_columns:
-
         cursor.execute("""
             ALTER TABLE documents
             ADD COLUMN owner_id INTEGER
         """)
 
-    # Add document metadata without deleting existing records.
     metadata_columns = {
         "source": "TEXT",
         "document_date": "TEXT",
@@ -217,18 +193,19 @@ def init_db():
         "nominee_name": "TEXT",
         "created_at": "TEXT"
     }
+
     for column_name, column_type in metadata_columns.items():
         if column_name not in document_columns:
             cursor.execute(
                 f"ALTER TABLE documents ADD COLUMN {column_name} {column_type}"
             )
-    cursor.execute(
-        "UPDATE documents SET created_at = COALESCE(created_at, CURRENT_TIMESTAMP)"
-    )
 
-    # --------------------------------------------------------
+    cursor.execute("""
+        UPDATE documents
+        SET created_at = COALESCE(created_at, CURRENT_TIMESTAMP)
+    """)
+
     # ACCESS REQUESTS
-    # --------------------------------------------------------
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS access_requests (
@@ -242,53 +219,43 @@ def init_db():
         )
     """)
 
-    cursor.execute(
-        "PRAGMA table_info(access_requests)"
-    )
+    cursor.execute("PRAGMA table_info(access_requests)")
 
     access_columns = [
-        column[1]
-        for column in cursor.fetchall()
+        column[1] for column in cursor.fetchall()
     ]
 
     if "approved_at" not in access_columns:
-
         cursor.execute("""
             ALTER TABLE access_requests
             ADD COLUMN approved_at TEXT
         """)
 
     if "expires_at" not in access_columns:
-
         cursor.execute("""
             ALTER TABLE access_requests
             ADD COLUMN expires_at TEXT
         """)
 
     if "owner_id" not in access_columns:
-
         cursor.execute("""
             ALTER TABLE access_requests
             ADD COLUMN owner_id INTEGER
         """)
 
     if "organization_id" not in access_columns:
-
         cursor.execute("""
             ALTER TABLE access_requests
             ADD COLUMN organization_id INTEGER
         """)
 
     if "document_id" not in access_columns:
-
         cursor.execute("""
             ALTER TABLE access_requests
             ADD COLUMN document_id INTEGER
         """)
 
-    # --------------------------------------------------------
     # ACTIVITY LOGS
-    # --------------------------------------------------------
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS activity_logs (
@@ -298,19 +265,13 @@ def init_db():
         )
     """)
 
-    # Add user_id without destroying old activity records.
-
-    cursor.execute(
-        "PRAGMA table_info(activity_logs)"
-    )
+    cursor.execute("PRAGMA table_info(activity_logs)")
 
     activity_columns = [
-        column[1]
-        for column in cursor.fetchall()
+        column[1] for column in cursor.fetchall()
     ]
 
     if "user_id" not in activity_columns:
-
         cursor.execute("""
             ALTER TABLE activity_logs
             ADD COLUMN user_id INTEGER
@@ -318,6 +279,12 @@ def init_db():
 
     conn.commit()
     conn.close()
+
+
+# IMPORTANT: This runs when Render/Gunicorn imports app.py.
+# Without this, the database tables may not exist on Render.
+
+init_db()
 
 
 # ============================================================
@@ -330,6 +297,7 @@ def allowed_file(filename):
         return False
 
     normalized_filename = secure_filename(filename.strip())
+
     return (
         "." in normalized_filename
         and normalized_filename.rsplit(".", 1)[1].lower()
@@ -344,23 +312,16 @@ def allowed_file(filename):
 def log_activity(action, details):
 
     conn = sqlite3.connect(DATABASE)
-
     cursor = conn.cursor()
 
     user_id = session.get("user_id")
 
     cursor.execute("""
         INSERT INTO activity_logs (
-            action,
-            details,
-            user_id
+            action, details, user_id
         )
         VALUES (?, ?, ?)
-    """, (
-        action,
-        details,
-        user_id
-    ))
+    """, (action, details, user_id))
 
     conn.commit()
     conn.close()
@@ -373,23 +334,17 @@ def log_activity(action, details):
 def update_expired_access():
 
     conn = sqlite3.connect(DATABASE)
-
     cursor = conn.cursor()
 
     now = datetime.now().isoformat()
 
     cursor.execute("""
-        SELECT
-            id,
-            organization,
-            document
+        SELECT id, organization, document
         FROM access_requests
         WHERE status = 'Approved'
         AND expires_at IS NOT NULL
         AND expires_at <= ?
-    """, (
-        now,
-    ))
+    """, (now,))
 
     expired_requests = cursor.fetchall()
 
@@ -404,28 +359,18 @@ def update_expired_access():
             SET status = 'Expired'
             WHERE id = ?
             AND status = 'Approved'
-        """, (
-            request_id,
-        ))
+        """, (request_id,))
 
         cursor.execute("""
             INSERT INTO activity_logs (
-                action,
-                details,
-                user_id
+                action, details, user_id
             )
-            SELECT
-                ?,
-                ?,
-                organization_id
+            SELECT ?, ?, organization_id
             FROM access_requests
             WHERE id = ?
         """, (
             "Access Expired",
-            (
-                f"Access for {organization} to "
-                f"{document} expired automatically"
-            ),
+            f"Access for {organization} to {document} expired automatically",
             request_id
         ))
 
@@ -442,97 +387,57 @@ def register():
 
     if request.method == "POST":
 
-        username = request.form.get(
-            "username",
-            ""
-        ).strip()
-
-        password = request.form.get(
-            "password",
-            ""
-        )
-
-        confirm_password = request.form.get(
-            "confirm_password",
-            ""
-        )
-
-        role = request.form.get(
-            "role",
-            ""
-        )
+        username = request.form.get("username", "").strip()
+        password = request.form.get("password", "")
+        confirm_password = request.form.get("confirm_password", "")
+        role = request.form.get("role", "")
 
         if not username:
-
             return render_template(
                 "register.html",
                 error="Please enter a username."
             )
 
         if not password:
-
             return render_template(
                 "register.html",
                 error="Please enter a password."
             )
 
         if password != confirm_password:
-
             return render_template(
                 "register.html",
                 error="Passwords do not match."
             )
 
-        if role not in [
-            "owner",
-            "organization"
-        ]:
-
+        if role not in ["owner", "organization"]:
             return render_template(
                 "register.html",
                 error="Please select a valid account type."
             )
 
         conn = sqlite3.connect(DATABASE)
-
         cursor = conn.cursor()
 
         existing_user = cursor.execute("""
             SELECT id
             FROM users
             WHERE username = ?
-        """, (
-            username,
-        )).fetchone()
+        """, (username,)).fetchone()
 
         if existing_user:
-
             conn.close()
-
             return render_template(
                 "register.html",
-                error=(
-                    "Username already exists. "
-                    "Please choose another one."
-                )
+                error="Username already exists. Please choose another one."
             )
 
-        hashed_password = generate_password_hash(
-            password
-        )
+        hashed_password = generate_password_hash(password)
 
         cursor.execute("""
-            INSERT INTO users (
-                username,
-                password,
-                role
-            )
+            INSERT INTO users (username, password, role)
             VALUES (?, ?, ?)
-        """, (
-            username,
-            hashed_password,
-            role
-        ))
+        """, (username, hashed_password, role))
 
         conn.commit()
         conn.close()
@@ -556,49 +461,33 @@ def login():
 
     if request.method == "POST":
 
-        username = request.form.get(
-            "username",
-            ""
-        ).strip()
-
-        password = request.form.get(
-            "password",
-            ""
-        )
+        username = request.form.get("username", "").strip()
+        password = request.form.get("password", "")
 
         if not username or not password:
-
             return render_template(
                 "login.html",
                 error="Please enter username and password."
             )
 
         conn = sqlite3.connect(DATABASE)
-
         conn.row_factory = sqlite3.Row
 
         user = conn.execute("""
             SELECT *
             FROM users
             WHERE username = ?
-        """, (
-            username,
-        )).fetchone()
+        """, (username,)).fetchone()
 
         conn.close()
 
         if user is None:
-
             return render_template(
                 "login.html",
                 error="Invalid username or password."
             )
 
-        if not check_password_hash(
-            user["password"],
-            password
-        ):
-
+        if not check_password_hash(user["password"], password):
             return render_template(
                 "login.html",
                 error="Invalid username or password."
@@ -628,14 +517,12 @@ def logout():
     username = session.get("username")
 
     if username:
-
         log_activity(
             "User Logout",
             f"User logged out: @{username}"
         )
 
     session.clear()
-
     return redirect("/login")
 
 
@@ -647,49 +534,32 @@ def logout():
 def profile(username):
 
     if "user_id" not in session:
-
         return redirect("/login")
 
     conn = sqlite3.connect(DATABASE)
-
     cursor = conn.cursor()
 
     cursor.execute("""
-        SELECT
-            id,
-            username,
-            role
+        SELECT id, username, role
         FROM users
         WHERE username = ?
         AND role = 'owner'
-    """, (
-        username,
-    ))
+    """, (username,))
 
     owner = cursor.fetchone()
 
     if owner is None:
-
         conn.close()
-
         return "Data Owner not found.", 404
 
     cursor.execute("""
-        SELECT
-            id,
-            name,
-            type,
-            file_path,
-            owner_id
+        SELECT id, name, type, file_path, owner_id
         FROM documents
         WHERE owner_id = ?
         ORDER BY id DESC
-    """, (
-        owner[0],
-    ))
+    """, (owner[0],))
 
     documents = cursor.fetchall()
-
     conn.close()
 
     return render_template(
@@ -703,51 +573,33 @@ def profile(username):
 # SEARCH DATA OWNERS
 # ============================================================
 
-@app.route(
-    "/search-owners",
-    methods=["GET", "POST"]
-)
+@app.route("/search-owners", methods=["GET", "POST"])
 def search_owners():
 
     if "user_id" not in session:
-
         return redirect("/login")
 
     if session.get("role") != "organization":
-
-        return (
-            "Only organizations can search for Data Owners.",
-            403
-        )
+        return "Only organizations can search for Data Owners.", 403
 
     owners = []
 
     if request.method == "POST":
 
-        search_username = request.form.get(
-            "username",
-            ""
-        ).strip()
+        search_username = request.form.get("username", "").strip()
 
         conn = sqlite3.connect(DATABASE)
-
         cursor = conn.cursor()
 
         cursor.execute("""
-            SELECT
-                id,
-                username,
-                role
+            SELECT id, username, role
             FROM users
             WHERE role = 'owner'
             AND username LIKE ?
             ORDER BY username
-        """, (
-            "%" + search_username + "%",
-        ))
+        """, ("%" + search_username + "%",))
 
         owners = cursor.fetchall()
-
         conn.close()
 
     return render_template(
@@ -764,21 +616,15 @@ def search_owners():
 def home():
 
     if "user_id" not in session:
-
         return redirect("/login")
 
     update_expired_access()
 
     conn = sqlite3.connect(DATABASE)
-
     cursor = conn.cursor()
 
     user_id = session["user_id"]
     role = session["role"]
-
-    # --------------------------------------------------------
-    # DATA OWNER
-    # --------------------------------------------------------
 
     if role == "owner":
 
@@ -786,31 +632,21 @@ def home():
             SELECT COUNT(*)
             FROM documents
             WHERE owner_id = ?
-        """, (
-            user_id,
-        )).fetchone()[0]
+        """, (user_id,)).fetchone()[0]
 
         pending_count = cursor.execute("""
             SELECT COUNT(*)
             FROM access_requests
             WHERE owner_id = ?
             AND status = 'Pending'
-        """, (
-            user_id,
-        )).fetchone()[0]
+        """, (user_id,)).fetchone()[0]
 
         approved_count = cursor.execute("""
             SELECT COUNT(*)
             FROM access_requests
             WHERE owner_id = ?
             AND status = 'Approved'
-        """, (
-            user_id,
-        )).fetchone()[0]
-
-    # --------------------------------------------------------
-    # ORGANIZATION
-    # --------------------------------------------------------
+        """, (user_id,)).fetchone()[0]
 
     elif role == "organization":
 
@@ -819,45 +655,32 @@ def home():
             FROM access_requests
             WHERE organization_id = ?
             AND status = 'Approved'
-        """, (
-            user_id,
-        )).fetchone()[0]
+        """, (user_id,)).fetchone()[0]
 
         pending_count = cursor.execute("""
             SELECT COUNT(*)
             FROM access_requests
             WHERE organization_id = ?
             AND status = 'Pending'
-        """, (
-            user_id,
-        )).fetchone()[0]
+        """, (user_id,)).fetchone()[0]
 
         approved_count = cursor.execute("""
             SELECT COUNT(*)
             FROM access_requests
             WHERE organization_id = ?
             AND status = 'Approved'
-        """, (
-            user_id,
-        )).fetchone()[0]
+        """, (user_id,)).fetchone()[0]
 
     else:
-
         document_count = 0
         pending_count = 0
         approved_count = 0
-
-    # --------------------------------------------------------
-    # USER ACTIVITY COUNT
-    # --------------------------------------------------------
 
     activity_count = cursor.execute("""
         SELECT COUNT(*)
         FROM activity_logs
         WHERE user_id = ?
-    """, (
-        user_id,
-    )).fetchone()[0]
+    """, (user_id,)).fetchone()[0]
 
     rejected_count = cursor.execute("""
         SELECT COUNT(*)
@@ -867,10 +690,7 @@ def home():
             owner_id = ?
             OR organization_id = ?
         )
-    """, (
-        user_id,
-        user_id
-    )).fetchone()[0]
+    """, (user_id, user_id)).fetchone()[0]
 
     conn.close()
 
@@ -888,89 +708,54 @@ def home():
 # DATA VAULT
 # ============================================================
 
-@app.route(
-    "/vault",
-    methods=["GET", "POST"]
-)
+@app.route("/vault", methods=["GET", "POST"])
 def vault():
 
     if "user_id" not in session:
-
         return redirect("/login")
 
     if session.get("role") != "owner":
-
-        return (
-            "Only Data Owners can manage the Data Vault.",
-            403
-        )
+        return "Only Data Owners can manage the Data Vault.", 403
 
     if request.method == "POST":
 
-        document_name = request.form.get(
-            "document_name",
-            ""
-        ).strip()
-
-        document_type = request.form.get(
-            "document_type",
-            ""
-        ).strip()
-
-        uploaded_file = request.files.get(
-            "document_file"
-        )
+        document_name = request.form.get("document_name", "").strip()
+        document_type = request.form.get("document_type", "").strip()
+        uploaded_file = request.files.get("document_file")
 
         if not document_name:
-
             return "Document name is required.", 400
 
         if not document_type:
-
             return "Document type is required.", 400
 
         if not uploaded_file:
-
             return "No file selected.", 400
 
         if uploaded_file.filename == "":
-
             return "No file selected.", 400
 
-        if not allowed_file(
-            uploaded_file.filename.strip()
-        ):
-
+        if not allowed_file(uploaded_file.filename.strip()):
             return (
-                "Invalid file type. "
-                "Allowed formats: PDF, JPG, JPEG, PNG, WEBP and DOCX.",
+                "Invalid file type. Allowed formats: PDF, JPG, JPEG, PNG, WEBP and DOCX.",
                 400
             )
 
-        original_filename = secure_filename(
-            uploaded_file.filename.strip()
-        )
+        original_filename = secure_filename(uploaded_file.filename.strip())
+        extension = original_filename.rsplit(".", 1)[1].lower()
 
-        extension = original_filename.rsplit(
-            ".",
-            1
-        )[1].lower()
-
-        unique_filename = (
-            str(uuid.uuid4())
-            + "."
-            + extension
-        )
+        unique_filename = str(uuid.uuid4()) + "." + extension
 
         file_path = os.path.join(
             app.config["UPLOAD_FOLDER"],
             unique_filename
         )
 
-        # Encrypt file bytes before they touch disk. Keep the original extension for compatibility.
         file_bytes = uploaded_file.read()
+
         if not file_bytes:
             return "The selected file is empty.", 400
+
         with open(file_path, "wb") as stored_file:
             stored_file.write(encrypt_document(file_bytes))
 
@@ -980,8 +765,10 @@ def vault():
         date_of_birth = request.form.get("date_of_birth", "").strip() or None
         nominee_name = request.form.get("nominee_name", "").strip()[:200] or None
 
-        # Validate optional dates rather than storing malformed values.
-        for field_name, field_value in (("document date", document_date), ("date of birth", date_of_birth)):
+        for field_name, field_value in (
+            ("document date", document_date),
+            ("date of birth", date_of_birth)
+        ):
             if field_value:
                 try:
                     datetime.strptime(field_value, "%Y-%m-%d")
@@ -990,7 +777,6 @@ def vault():
                     return f"Please enter a valid {field_name}.", 400
 
         conn = sqlite3.connect(DATABASE)
-
         cursor = conn.cursor()
 
         cursor.execute("""
@@ -1000,8 +786,15 @@ def vault():
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            document_name, document_type, unique_filename, session["user_id"],
-            source, document_date, relationship, date_of_birth, nominee_name,
+            document_name,
+            document_type,
+            unique_filename,
+            session["user_id"],
+            source,
+            document_date,
+            relationship,
+            date_of_birth,
+            nominee_name,
             datetime.now().isoformat(timespec="seconds")
         ))
 
@@ -1010,71 +803,77 @@ def vault():
 
         log_activity(
             "Document Uploaded",
-            (
-                f"@{session['username']} uploaded "
-                f"{document_name} ({document_type}) "
-                f"to Data Vault"
-            )
+            f"@{session['username']} uploaded {document_name} ({document_type}) to Data Vault"
         )
 
         return redirect("/vault")
 
     conn = sqlite3.connect(DATABASE)
-
     cursor = conn.cursor()
 
     cursor.execute("""
         SELECT
-            id,
-            name,
-            type,
-            file_path,
-            owner_id,
-            source,
-            document_date,
-            relationship,
-            date_of_birth,
-            nominee_name,
-            created_at
+            id, name, type, file_path, owner_id, source,
+            document_date, relationship, date_of_birth,
+            nominee_name, created_at
         FROM documents
         WHERE owner_id = ?
         ORDER BY id DESC
-    """, (
-        session["user_id"],
-    ))
+    """, (session["user_id"],))
 
     documents = cursor.fetchall()
-
     conn.close()
 
     enriched_documents = []
     today = datetime.now().date()
+
     for document in documents:
+
         row = list(document)
         reminders = []
+
         if not row[5]:
             reminders.append("Add document source")
+
         if not row[6]:
             reminders.append("Add document date")
+
         if not row[7]:
             reminders.append("Add relationship to owner")
+
         if row[2] in ("Identity", "Personal") and not row[8]:
             reminders.append("Date of birth missing (if applicable)")
+
         if row[2] == "Financial" and not row[9]:
             reminders.append("Insurance nominee missing (if applicable)")
+
         date_for_age = row[6] or (row[10][:10] if row[10] else None)
         document_age = None
+
         if date_for_age:
             try:
-                age_days = (today - datetime.strptime(date_for_age, "%Y-%m-%d").date()).days
+                age_days = (
+                    today - datetime.strptime(date_for_age, "%Y-%m-%d").date()
+                ).days
+
                 document_age = f"{max(age_days, 0)} days"
+
             except ValueError:
                 pass
+
         enriched_documents.append({
-            "id": row[0], "name": row[1], "type": row[2], "file_path": row[3],
-            "source": row[5], "document_date": row[6], "relationship": row[7],
-            "date_of_birth": row[8], "nominee_name": row[9],
-            "created_at": row[10], "age": document_age, "reminders": reminders
+            "id": row[0],
+            "name": row[1],
+            "type": row[2],
+            "file_path": row[3],
+            "source": row[5],
+            "document_date": row[6],
+            "relationship": row[7],
+            "date_of_birth": row[8],
+            "nominee_name": row[9],
+            "created_at": row[10],
+            "age": document_age,
+            "reminders": reminders
         })
 
     return render_template(
@@ -1088,16 +887,26 @@ def vault():
 # ============================================================
 
 def serve_document_file(filename, document_name, as_attachment=False):
-    """Return decrypted document bytes only after route-level authorization."""
-    path = os.path.join(app.config["UPLOAD_FOLDER"], os.path.basename(filename))
+
+    path = os.path.join(
+        app.config["UPLOAD_FOLDER"],
+        os.path.basename(filename)
+    )
+
     if not os.path.isfile(path):
         return "Document file is missing from storage.", 404
+
     try:
         with open(path, "rb") as stored_file:
             content = decrypt_document(stored_file.read())
+
     except (OSError, ValueError) as exc:
         app.logger.error("Document retrieval failed: %s", exc)
-        return "Document could not be opened. Verify the encryption key and stored file.", 500
+        return (
+            "Document could not be opened. Verify the encryption key and stored file.",
+            500
+        )
+
     return send_file(
         BytesIO(content),
         mimetype=mimetypes.guess_type(filename)[0] or "application/octet-stream",
@@ -1110,86 +919,60 @@ def serve_document_file(filename, document_name, as_attachment=False):
 def uploaded_file(filename):
 
     if "user_id" not in session:
-
         return redirect("/login")
 
     update_expired_access()
 
     conn = sqlite3.connect(DATABASE)
-
     cursor = conn.cursor()
 
     cursor.execute("""
-        SELECT
-            id,
-            name,
-            owner_id,
-            file_path
+        SELECT id, name, owner_id, file_path
         FROM documents
         WHERE file_path = ?
-    """, (
-        filename,
-    ))
+    """, (filename,))
 
     document = cursor.fetchone()
 
     if document is None:
-
         conn.close()
-
         return "Document not found.", 404
 
     document_id = document[0]
     document_name = document[1]
     owner_id = document[2]
 
-    # --------------------------------------------------------
-    # DATA OWNER
-    # --------------------------------------------------------
-
     if session.get("role") == "owner":
 
         if owner_id != session["user_id"]:
-
             conn.close()
-
             return "Access denied.", 403
 
         conn.close()
 
-        return serve_document_file(filename, document_name, as_attachment=False)
-
-    # --------------------------------------------------------
-    # ORGANIZATION
-    # --------------------------------------------------------
+        return serve_document_file(
+            filename,
+            document_name,
+            as_attachment=False
+        )
 
     if session.get("role") == "organization":
 
         cursor.execute("""
-            SELECT
-                id,
-                permission,
-                expires_at,
-                status
+            SELECT id, permission, expires_at, status
             FROM access_requests
             WHERE organization_id = ?
             AND document_id = ?
             ORDER BY id DESC
             LIMIT 1
-        """, (
-            session["user_id"],
-            document_id
-        ))
+        """, (session["user_id"], document_id))
 
         access_request = cursor.fetchone()
 
         if access_request is None:
-
             conn.close()
-
             return (
-                "Access denied. "
-                "No access request exists for this document.",
+                "Access denied. No access request exists for this document.",
                 403
             )
 
@@ -1199,40 +982,18 @@ def uploaded_file(filename):
         status = access_request[3]
 
         if status != "Approved":
-
             conn.close()
-
-            return (
-                f"Access denied. "
-                f"Current access status is {status}.",
-                403
-            )
+            return f"Access denied. Current access status is {status}.", 403
 
         if not expires_at:
-
             conn.close()
-
-            return (
-                "Access denied. "
-                "Access expiry is not defined.",
-                403
-            )
+            return "Access denied. Access expiry is not defined.", 403
 
         try:
-
-            expiry_time = datetime.fromisoformat(
-                expires_at
-            )
-
+            expiry_time = datetime.fromisoformat(expires_at)
         except ValueError:
-
             conn.close()
-
-            return (
-                "Access denied. "
-                "Invalid access expiry information.",
-                403
-            )
+            return "Access denied. Invalid access expiry information.", 403
 
         if datetime.now() >= expiry_time:
 
@@ -1241,95 +1002,72 @@ def uploaded_file(filename):
                 SET status = 'Expired'
                 WHERE id = ?
                 AND status = 'Approved'
-            """, (
-                request_id,
-            ))
+            """, (request_id,))
 
             cursor.execute("""
                 INSERT INTO activity_logs (
-                    action,
-                    details,
-                    user_id
+                    action, details, user_id
                 )
                 VALUES (?, ?, ?)
             """, (
                 "Access Expired",
-                (
-                    f"Access expired for organization "
-                    f"@{session['username']} on "
-                    f"document '{document_name}'"
-                ),
+                f"Access expired for organization @{session['username']} on document '{document_name}'",
                 session["user_id"]
             ))
 
             conn.commit()
             conn.close()
 
-            return (
-                "Access denied. This access has expired.",
-                403
-            )
-
-        # ----------------------------------------------------
-        # VIEW ONLY
-        # ----------------------------------------------------
+            return "Access denied. This access has expired.", 403
 
         if permission == "View Only":
 
             cursor.execute("""
                 INSERT INTO activity_logs (
-                    action,
-                    details,
-                    user_id
+                    action, details, user_id
                 )
                 VALUES (?, ?, ?)
             """, (
                 "Document Viewed",
-                (
-                    f"@{session['username']} viewed "
-                    f"'{document_name}'"
-                ),
+                f"@{session['username']} viewed '{document_name}'",
                 session["user_id"]
             ))
 
             conn.commit()
             conn.close()
 
-            return serve_document_file(filename, document_name, as_attachment=False)
-
-        # ----------------------------------------------------
-        # DOWNLOAD
-        # ----------------------------------------------------
+            return serve_document_file(
+                filename,
+                document_name,
+                as_attachment=False
+            )
 
         if permission == "Download":
 
             cursor.execute("""
                 INSERT INTO activity_logs (
-                    action,
-                    details,
-                    user_id
+                    action, details, user_id
                 )
                 VALUES (?, ?, ?)
             """, (
                 "Document Downloaded",
-                (
-                    f"@{session['username']} downloaded "
-                    f"'{document_name}'"
-                ),
+                f"@{session['username']} downloaded '{document_name}'",
                 session["user_id"]
             ))
 
             conn.commit()
             conn.close()
 
-            return serve_document_file(filename, document_name, as_attachment=True)
+            return serve_document_file(
+                filename,
+                document_name,
+                as_attachment=True
+            )
 
         conn.close()
-
         return "Access denied. Invalid permission.", 403
 
     conn.close()
-
     return "Access denied.", 403
 
 
@@ -1337,14 +1075,10 @@ def uploaded_file(filename):
 # ACCESS REQUESTS
 # ============================================================
 
-@app.route(
-    "/access-requests",
-    methods=["GET", "POST"]
-)
+@app.route("/access-requests", methods=["GET", "POST"])
 def access_requests():
 
     if "user_id" not in session:
-
         return redirect("/login")
 
     update_expired_access()
@@ -1352,107 +1086,52 @@ def access_requests():
     user_id = session["user_id"]
     role = session["role"]
 
-    # ========================================================
     # ORGANIZATION
-    # ========================================================
 
     if role == "organization":
 
         if request.method == "POST":
 
-            owner_id = request.form.get(
-                "owner_id"
-            )
-
-            document_id = request.form.get(
-                "document_id"
-            )
-
-            purpose = request.form.get(
-                "purpose",
-                ""
-            ).strip()
-
-            permission = request.form.get(
-                "permission"
-            )
-
-            duration = request.form.get(
-                "duration"
-            )
+            owner_id = request.form.get("owner_id")
+            document_id = request.form.get("document_id")
+            purpose = request.form.get("purpose", "").strip()
+            permission = request.form.get("permission")
+            duration = request.form.get("duration")
 
             if not owner_id or not document_id:
+                return "Invalid Data Owner or document.", 400
 
-                return (
-                    "Invalid Data Owner or document.",
-                    400
-                )
+            if not purpose or not permission or not duration:
+                return "Please fill all required fields.", 400
 
-            if (
-                not purpose
-                or not permission
-                or not duration
-            ):
-
-                return (
-                    "Please fill all required fields.",
-                    400
-                )
-
-            if permission not in [
-                "View Only",
-                "Download"
-            ]:
-
+            if permission not in ["View Only", "Download"]:
                 return "Invalid permission.", 400
 
-            if duration not in [
-                "24 Hours",
-                "7 Days",
-                "30 Days"
-            ]:
-
+            if duration not in ["24 Hours", "7 Days", "30 Days"]:
                 return "Invalid duration.", 400
 
             conn = sqlite3.connect(DATABASE)
-
             cursor = conn.cursor()
 
             cursor.execute("""
                 SELECT
-                    d.id,
-                    d.name,
-                    d.type,
-                    d.owner_id,
-                    u.username
+                    d.id, d.name, d.type, d.owner_id, u.username
                 FROM documents d
-                JOIN users u
-                    ON d.owner_id = u.id
+                JOIN users u ON d.owner_id = u.id
                 WHERE d.id = ?
                 AND d.owner_id = ?
                 AND u.role = 'owner'
-            """, (
-                document_id,
-                owner_id
-            ))
+            """, (document_id, owner_id))
 
             document_data = cursor.fetchone()
 
             if document_data is None:
-
                 conn.close()
-
-                return (
-                    "Document or Data Owner not found.",
-                    404
-                )
+                return "Document or Data Owner not found.", 404
 
             document_name = document_data[1]
             owner_username = document_data[4]
-
             organization_username = session["username"]
-
-            # Prevent duplicate active/pending requests.
 
             existing = cursor.execute("""
                 SELECT id
@@ -1460,32 +1139,19 @@ def access_requests():
                 WHERE organization_id = ?
                 AND document_id = ?
                 AND status IN ('Pending', 'Approved')
-            """, (
-                user_id,
-                document_id
-            )).fetchone()
+            """, (user_id, document_id)).fetchone()
 
             if existing:
-
                 conn.close()
-
                 return (
-                    "You already have a pending or active "
-                    "request for this document.",
+                    "You already have a pending or active request for this document.",
                     400
                 )
 
             cursor.execute("""
                 INSERT INTO access_requests (
-                    organization,
-                    document,
-                    purpose,
-                    permission,
-                    duration,
-                    status,
-                    owner_id,
-                    organization_id,
-                    document_id
+                    organization, document, purpose, permission,
+                    duration, status, owner_id, organization_id, document_id
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
@@ -1505,30 +1171,18 @@ def access_requests():
 
             log_activity(
                 "Access Request Created",
-                (
-                    f"@{organization_username} requested "
-                    f"{document_name} from "
-                    f"@{owner_username} for {purpose}"
-                )
+                f"@{organization_username} requested {document_name} from @{owner_username} for {purpose}"
             )
 
-            return redirect(
-                "/access-requests"
-            )
+            return redirect("/access-requests")
 
-        # ----------------------------------------------------
         # LOAD OWNERS
-        # ----------------------------------------------------
 
         conn = sqlite3.connect(DATABASE)
-
         cursor = conn.cursor()
 
         cursor.execute("""
-            SELECT
-                id,
-                username,
-                role
+            SELECT id, username, role
             FROM users
             WHERE role = 'owner'
             ORDER BY username
@@ -1536,43 +1190,25 @@ def access_requests():
 
         owners = cursor.fetchall()
 
-        # ----------------------------------------------------
         # LOAD DOCUMENTS
-        # ----------------------------------------------------
 
         cursor.execute("""
-            SELECT
-                d.id,
-                d.name,
-                d.type,
-                d.owner_id
+            SELECT d.id, d.name, d.type, d.owner_id
             FROM documents d
-            JOIN users u
-                ON d.owner_id = u.id
+            JOIN users u ON d.owner_id = u.id
             WHERE u.role = 'owner'
             ORDER BY d.id DESC
         """)
 
         documents = cursor.fetchall()
 
-        # ----------------------------------------------------
         # LOAD ORGANIZATION REQUESTS
-        # ----------------------------------------------------
 
         cursor.execute("""
             SELECT
-                ar.id,
-                ar.organization,
-                ar.document,
-                ar.purpose,
-                ar.permission,
-                ar.duration,
-                ar.status,
-                ar.approved_at,
-                ar.expires_at,
-                d.file_path,
-                owner.username,
-                ar.document_id
+                ar.id, ar.organization, ar.document, ar.purpose,
+                ar.permission, ar.duration, ar.status, ar.approved_at,
+                ar.expires_at, d.file_path, owner.username, ar.document_id
             FROM access_requests ar
             LEFT JOIN documents d
                 ON d.id = ar.document_id
@@ -1581,21 +1217,13 @@ def access_requests():
                 ON owner.id = ar.owner_id
             WHERE ar.organization_id = ?
             ORDER BY ar.id DESC
-        """, (
-            user_id,
-        ))
+        """, (user_id,))
 
         requests = cursor.fetchall()
-
         conn.close()
 
-        selected_owner = request.args.get(
-            "owner"
-        )
-
-        selected_document = request.args.get(
-            "document"
-        )
+        selected_owner = request.args.get("owner")
+        selected_document = request.args.get("document")
 
         return render_template(
             "access_requests.html",
@@ -1607,29 +1235,18 @@ def access_requests():
             selected_document=selected_document
         )
 
-    # ========================================================
     # DATA OWNER
-    # ========================================================
 
     if role == "owner":
 
         conn = sqlite3.connect(DATABASE)
-
         cursor = conn.cursor()
 
         cursor.execute("""
             SELECT
-                ar.id,
-                ar.organization,
-                ar.document,
-                ar.purpose,
-                ar.permission,
-                ar.duration,
-                ar.status,
-                ar.approved_at,
-                ar.expires_at,
-                d.file_path,
-                organization.username,
+                ar.id, ar.organization, ar.document, ar.purpose,
+                ar.permission, ar.duration, ar.status, ar.approved_at,
+                ar.expires_at, d.file_path, organization.username,
                 ar.document_id
             FROM access_requests ar
             LEFT JOIN documents d
@@ -1639,12 +1256,9 @@ def access_requests():
                 ON organization.id = ar.organization_id
             WHERE ar.owner_id = ?
             ORDER BY ar.id DESC
-        """, (
-            user_id,
-        ))
+        """, (user_id,))
 
         requests = cursor.fetchall()
-
         conn.close()
 
         return render_template(
@@ -1662,46 +1276,28 @@ def access_requests():
 # APPROVE REQUEST
 # ============================================================
 
-@app.route(
-    "/approve-request/<int:request_id>",
-    methods=["POST"]
-)
+@app.route("/approve-request/<int:request_id>", methods=["POST"])
 def approve_request(request_id):
 
     if "user_id" not in session:
-
         return redirect("/login")
 
     if session.get("role") != "owner":
-
-        return (
-            "Only Data Owners can approve requests.",
-            403
-        )
+        return "Only Data Owners can approve requests.", 403
 
     conn = sqlite3.connect(DATABASE)
-
     cursor = conn.cursor()
 
     cursor.execute("""
-        SELECT
-            organization,
-            document,
-            duration,
-            owner_id,
-            status
+        SELECT organization, document, duration, owner_id, status
         FROM access_requests
         WHERE id = ?
-    """, (
-        request_id,
-    ))
+    """, (request_id,))
 
     request_data = cursor.fetchone()
 
     if request_data is None:
-
         conn.close()
-
         return "Access request not found.", 404
 
     organization = request_data[0]
@@ -1711,53 +1307,28 @@ def approve_request(request_id):
     status = request_data[4]
 
     if owner_id != session["user_id"]:
-
         conn.close()
-
-        return (
-            "You are not authorized to approve this request.",
-            403
-        )
+        return "You are not authorized to approve this request.", 403
 
     if status != "Pending":
-
         conn.close()
-
-        return (
-            "Only pending requests can be approved.",
-            400
-        )
+        return "Only pending requests can be approved.", 400
 
     approved_at = datetime.now()
 
     if duration == "24 Hours":
-
-        expires_at = approved_at + timedelta(
-            hours=24
-        )
-
+        expires_at = approved_at + timedelta(hours=24)
     elif duration == "7 Days":
-
-        expires_at = approved_at + timedelta(
-            days=7
-        )
-
+        expires_at = approved_at + timedelta(days=7)
     elif duration == "30 Days":
-
-        expires_at = approved_at + timedelta(
-            days=30
-        )
-
+        expires_at = approved_at + timedelta(days=30)
     else:
-
         conn.close()
-
         return "Invalid duration.", 400
 
     cursor.execute("""
         UPDATE access_requests
-        SET
-            status = 'Approved',
+        SET status = 'Approved',
             approved_at = ?,
             expires_at = ?
         WHERE id = ?
@@ -1773,11 +1344,7 @@ def approve_request(request_id):
 
     log_activity(
         "Access Approved",
-        (
-            f"{organization} approved for {document}. "
-            f"Access expires on "
-            f"{expires_at.strftime('%Y-%m-%d %H:%M')}"
-        )
+        f"{organization} approved for {document}. Access expires on {expires_at.strftime('%Y-%m-%d %H:%M')}"
     )
 
     return redirect("/access-requests")
@@ -1787,45 +1354,28 @@ def approve_request(request_id):
 # REJECT REQUEST
 # ============================================================
 
-@app.route(
-    "/reject-request/<int:request_id>",
-    methods=["POST"]
-)
+@app.route("/reject-request/<int:request_id>", methods=["POST"])
 def reject_request(request_id):
 
     if "user_id" not in session:
-
         return redirect("/login")
 
     if session.get("role") != "owner":
-
-        return (
-            "Only Data Owners can reject requests.",
-            403
-        )
+        return "Only Data Owners can reject requests.", 403
 
     conn = sqlite3.connect(DATABASE)
-
     cursor = conn.cursor()
 
     cursor.execute("""
-        SELECT
-            organization,
-            document,
-            owner_id,
-            status
+        SELECT organization, document, owner_id, status
         FROM access_requests
         WHERE id = ?
-    """, (
-        request_id,
-    ))
+    """, (request_id,))
 
     request_data = cursor.fetchone()
 
     if request_data is None:
-
         conn.close()
-
         return "Access request not found.", 404
 
     organization = request_data[0]
@@ -1834,31 +1384,19 @@ def reject_request(request_id):
     status = request_data[3]
 
     if owner_id != session["user_id"]:
-
         conn.close()
-
-        return (
-            "You are not authorized to reject this request.",
-            403
-        )
+        return "You are not authorized to reject this request.", 403
 
     if status != "Pending":
-
         conn.close()
-
-        return (
-            "Only pending requests can be rejected.",
-            400
-        )
+        return "Only pending requests can be rejected.", 400
 
     cursor.execute("""
         UPDATE access_requests
         SET status = 'Rejected'
         WHERE id = ?
         AND status = 'Pending'
-    """, (
-        request_id,
-    ))
+    """, (request_id,))
 
     conn.commit()
     conn.close()
@@ -1875,45 +1413,28 @@ def reject_request(request_id):
 # REVOKE REQUEST
 # ============================================================
 
-@app.route(
-    "/revoke-request/<int:request_id>",
-    methods=["POST"]
-)
+@app.route("/revoke-request/<int:request_id>", methods=["POST"])
 def revoke_request(request_id):
 
     if "user_id" not in session:
-
         return redirect("/login")
 
     if session.get("role") != "owner":
-
-        return (
-            "Only Data Owners can revoke access.",
-            403
-        )
+        return "Only Data Owners can revoke access.", 403
 
     conn = sqlite3.connect(DATABASE)
-
     cursor = conn.cursor()
 
     cursor.execute("""
-        SELECT
-            organization,
-            document,
-            owner_id,
-            status
+        SELECT organization, document, owner_id, status
         FROM access_requests
         WHERE id = ?
-    """, (
-        request_id,
-    ))
+    """, (request_id,))
 
     request_data = cursor.fetchone()
 
     if request_data is None:
-
         conn.close()
-
         return "Access request not found.", 404
 
     organization = request_data[0]
@@ -1922,41 +1443,26 @@ def revoke_request(request_id):
     status = request_data[3]
 
     if owner_id != session["user_id"]:
-
         conn.close()
-
-        return (
-            "You are not authorized to revoke this access.",
-            403
-        )
+        return "You are not authorized to revoke this access.", 403
 
     if status != "Approved":
-
         conn.close()
-
-        return (
-            "Only active approved access can be revoked.",
-            400
-        )
+        return "Only active approved access can be revoked.", 400
 
     cursor.execute("""
         UPDATE access_requests
         SET status = 'Revoked'
         WHERE id = ?
         AND status = 'Approved'
-    """, (
-        request_id,
-    ))
+    """, (request_id,))
 
     conn.commit()
     conn.close()
 
     log_activity(
         "Access Revoked",
-        (
-            f"Access revoked from "
-            f"{organization} for {document}"
-        )
+        f"Access revoked from {organization} for {document}"
     )
 
     return redirect("/access-requests")
@@ -1966,14 +1472,10 @@ def revoke_request(request_id):
 # PRIVACY RISK ANALYSIS
 # ============================================================
 
-@app.route(
-    "/risk-analysis",
-    methods=["GET", "POST"]
-)
+@app.route("/risk-analysis", methods=["GET", "POST"])
 def risk_analysis():
 
     if "user_id" not in session:
-
         return redirect("/login")
 
     risk = None
@@ -1982,92 +1484,38 @@ def risk_analysis():
 
     if request.method == "POST":
 
-        document_type = request.form.get(
-            "document_type"
-        )
-
-        permission = request.form.get(
-            "permission"
-        )
-
-        duration = request.form.get(
-            "duration"
-        )
-
-        # ----------------------------------------------------
-        # INPUT VALIDATION
-        # ----------------------------------------------------
+        document_type = request.form.get("document_type")
+        permission = request.form.get("permission")
+        duration = request.form.get("duration")
 
         if document_type not in [
-            "Education",
-            "Identity",
-            "Financial",
-            "Personal"
+            "Education", "Identity", "Financial", "Personal"
         ]:
+            return "Invalid document type.", 400
 
-            return (
-                "Invalid document type.",
-                400
-            )
+        if permission not in ["View Only", "Download"]:
+            return "Invalid permission.", 400
 
-        if permission not in [
-            "View Only",
-            "Download"
-        ]:
+        if duration not in ["24 Hours", "7 Days", "30 Days"]:
+            return "Invalid duration.", 400
 
-            return (
-                "Invalid permission.",
-                400
-            )
-
-        if duration not in [
-            "24 Hours",
-            "7 Days",
-            "30 Days"
-        ]:
-
-            return (
-                "Invalid duration.",
-                400
-            )
-
-        # ----------------------------------------------------
-        # MACHINE LEARNING FEATURES
-        # ----------------------------------------------------
-
-        if document_type in [
-            "Identity",
-            "Financial"
-        ]:
-
+        if document_type in ["Identity", "Financial"]:
             document_risk = 3
-
         elif document_type == "Personal":
-
             document_risk = 2
-
         else:
-
             document_risk = 1
 
         if permission == "Download":
-
             permission_risk = 3
-
         else:
-
             permission_risk = 1
 
         if duration == "30 Days":
-
             duration_risk = 3
-
         elif duration == "7 Days":
-
             duration_risk = 2
-
         else:
-
             duration_risk = 1
 
         features = [[
@@ -2076,107 +1524,61 @@ def risk_analysis():
             duration_risk
         ]]
 
-        # ----------------------------------------------------
-        # RANDOM FOREST PREDICTION
-        # ----------------------------------------------------
-
         if risk_model is not None:
-
             try:
-
-                risk = risk_model.predict(
-                    features
-                )[0]
-
+                risk = risk_model.predict(features)[0]
             except Exception as exc:
-
-                print(
-                    f"AI model prediction error: {exc}"
-                )
-
+                print(f"AI model prediction error: {exc}")
                 risk = None
 
-        # ----------------------------------------------------
         # EXPLAINABLE NUMERICAL SCORE
-        # ----------------------------------------------------
 
         score = 0
 
-        if document_type in [
-            "Identity",
-            "Financial"
-        ]:
-
+        if document_type in ["Identity", "Financial"]:
             score += 40
-
         elif document_type == "Personal":
-
             score += 30
-
         elif document_type == "Education":
-
             score += 20
 
         if permission == "Download":
-
             score += 30
-
         elif permission == "View Only":
-
             score += 10
 
         if duration == "30 Days":
-
             score += 30
-
         elif duration == "7 Days":
-
             score += 20
-
         elif duration == "24 Hours":
-
             score += 10
 
-        # ----------------------------------------------------
         # FALLBACK CLASSIFICATION
-        # ----------------------------------------------------
 
         if risk is None:
-
             if score >= 70:
-
                 risk = "HIGH"
-
             elif score >= 40:
-
                 risk = "MEDIUM"
-
             else:
-
                 risk = "LOW"
 
-        # ----------------------------------------------------
         # RECOMMENDATION
-        # ----------------------------------------------------
 
         if risk == "HIGH":
-
             recommendation = (
                 "AI detected a high privacy risk. "
-                "Consider reducing permission or "
-                "access duration."
+                "Consider reducing permission or access duration."
             )
 
         elif risk == "MEDIUM":
-
             recommendation = (
                 "AI detected a medium privacy risk. "
-                "Review the request and grant only "
-                "the minimum access required."
+                "Review the request and grant only the minimum access required."
             )
 
         else:
-
             recommendation = (
                 "AI detected a relatively low privacy risk. "
                 "Normal privacy controls are recommended."
@@ -2198,29 +1600,21 @@ def risk_analysis():
 def activity():
 
     if "user_id" not in session:
-
         return redirect("/login")
 
     update_expired_access()
 
     conn = sqlite3.connect(DATABASE)
-
     cursor = conn.cursor()
 
     cursor.execute("""
-        SELECT
-            id,
-            action,
-            details
+        SELECT id, action, details
         FROM activity_logs
         WHERE user_id = ?
         ORDER BY id DESC
-    """, (
-        session["user_id"],
-    ))
+    """, (session["user_id"],))
 
     activities = cursor.fetchall()
-
     conn.close()
 
     return render_template(
@@ -2235,36 +1629,58 @@ def activity():
 
 def encrypt_existing_documents():
     """Encrypt legacy plaintext files in place after a persistent key exists."""
+
     conn = sqlite3.connect(DATABASE)
+
     try:
-        rows = conn.execute(
-            "SELECT file_path FROM documents WHERE file_path IS NOT NULL"
-        ).fetchall()
+        rows = conn.execute("""
+            SELECT file_path
+            FROM documents
+            WHERE file_path IS NOT NULL
+        """).fetchall()
+
     finally:
         conn.close()
 
     changed = 0
+
     for (filename,) in rows:
+
         safe_name = os.path.basename(filename or "")
+
         if not safe_name:
             continue
-        path = os.path.join(app.config["UPLOAD_FOLDER"], safe_name)
+
+        path = os.path.join(
+            app.config["UPLOAD_FOLDER"],
+            safe_name
+        )
+
         if not os.path.isfile(path):
             continue
+
         with open(path, "rb") as stored_file:
             current_bytes = stored_file.read()
+
         if current_bytes.startswith(ENCRYPTED_PREFIX):
             continue
+
         encrypted_bytes = encrypt_document(current_bytes)
         temp_path = path + ".encrypting"
+
         with open(temp_path, "wb") as stored_file:
             stored_file.write(encrypted_bytes)
+
         os.replace(temp_path, path)
         changed += 1
+
     if changed:
         print(f"Encrypted {changed} existing document file(s).")
     else:
-        print("Document encryption check complete; no legacy files needed encryption.")
+        print(
+            "Document encryption check complete; "
+            "no legacy files needed encryption."
+        )
 
 
 # ============================================================
@@ -2276,6 +1692,4 @@ if __name__ == "__main__":
     init_db()
     encrypt_existing_documents()
 
-    app.run(
-        debug=True
-    )
+    app.run(debug=True)
